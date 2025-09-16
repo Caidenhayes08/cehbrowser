@@ -1,4 +1,5 @@
 import sys
+import requests # Make sure you have this installed: pip install requests
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QToolBar,
     QAction, QLineEdit, QWidget, QVBoxLayout, QInputDialog,
@@ -8,6 +9,10 @@ from PyQt5.QtCore import QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 from PyQt5.QtNetwork import QNetworkProxy
+
+# Use a test URL that is known to work well for checking proxy
+TEST_URL = "http://httpbin.org/ip"
+GEONODE_API_URL = "https://proxylist.geonode.com/api/proxy-list?protocols=http&limit=500&page=1&sort_by=lastChecked&sort_type=desc"
 
 
 class BrowserTab(QWidget):
@@ -26,6 +31,7 @@ class BrowserTab(QWidget):
             url = "http://" + url
         self.webview.setUrl(QUrl(url))
 
+
 class Browser(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -36,91 +42,75 @@ class Browser(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.tabBarDoubleClicked.connect(lambda: self.add_new_tab())
-        self.tabs.currentChanged.connect(self.update_url_bar)
+        # Move this line: self.tabs.currentChanged.connect(self.update_url_bar)
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
-
         self.setCentralWidget(self.tabs)
 
-        # Navigation bar
-        nav_bar = QToolBar()
-        self.addToolBar(nav_bar)
-        
+        self.add_new_tab()
+
+        # Navigation Bar
+        self.navigation_bar = QToolBar("Navigation")
+        self.addToolBar(self.navigation_bar)
+
+        self.back_button = QAction("Back", self)
+        self.back_button.triggered.connect(self.back_page)
+        self.navigation_bar.addAction(self.back_button)
+
+        self.forward_button = QAction("Forward", self)
+        self.forward_button.triggered.connect(self.forward_page)
+        self.navigation_bar.addAction(self.forward_button)
+
+        self.reload_button = QAction("Reload", self)
+        self.reload_button.triggered.connect(self.reload_page)
+        self.navigation_bar.addAction(self.reload_button)
+
+        self.home_button = QAction("Home", self)
+        self.home_button.triggered.connect(self.go_home)
+        self.navigation_bar.addAction(self.home_button)
+
         self.url_bar = QLineEdit()
         self.url_bar.returnPressed.connect(self.navigate_to_url)
-        nav_bar.addWidget(self.url_bar)
+        self.navigation_bar.addWidget(self.url_bar)
 
-        # Add the 'Go' button here
-        go_btn = QAction("Go", self)
-        go_btn.triggered.connect(self.navigate_to_url)
-        nav_bar.addAction(go_btn)
+        # Connect the signal *after* all widgets have been created
+        self.tabs.currentChanged.connect(self.update_url_bar)
 
-        new_tab_btn = QAction("New Tab", self)
-        new_tab_btn.triggered.connect(lambda: self.add_new_tab())
-        nav_bar.addAction(new_tab_btn)
-        
-        back_btn = QAction("Back", self)
-        back_btn.triggered.connect(self.go_back)
-        nav_bar.addAction(back_btn)
+        # Proxy action button
+        self.find_proxy_action = QAction("Find Proxy", self)
+        self.find_proxy_action.triggered.connect(self.find_and_set_proxy)
+        self.navigation_bar.addAction(self.find_proxy_action)
 
-        forward_btn = QAction("Forward", self)
-        forward_btn.triggered.connect(self.go_forward)
-        nav_bar.addAction(forward_btn)
-
-        reload_btn = QAction("Reload", self)
-        reload_btn.triggered.connect(self.reload_page)
-        nav_bar.addAction(reload_btn)
-
-        home_btn = QAction("Home", self)
-        home_btn.triggered.connect(self.go_home)
-        nav_bar.addAction(home_btn)
-
-        new_tab_btn = QAction("New Tab", self)
-        new_tab_btn.triggered.connect(lambda: self.add_new_tab())
-        nav_bar.addAction(new_tab_btn)
-
-        # Proxy action
-        proxy_btn = QAction("Set Proxy", self)
-        proxy_btn.triggered.connect(self.set_proxy)
-        nav_bar.addAction(proxy_btn)
-
-        # Start with one tab
-        self.add_new_tab(url="https://google.com")
-
-    def add_new_tab(self, url="https://www.google.com"):
-        browser_tab = BrowserTab()
-        index = self.tabs.addTab(browser_tab, "New Tab")
-        self.tabs.setCurrentIndex(index)
-        browser_tab.webview.load(QUrl(url))
-        browser_tab.webview.urlChanged.connect(lambda qurl: self.update_url_bar(qurl, browser_tab))
-        browser_tab.webview.titleChanged.connect(lambda title: self.tabs.setTabText(self.tabs.indexOf(browser_tab), title))
-    
     def current_webview(self):
-        current_widget = self.tabs.currentWidget()
-        if current_widget:
-            return current_widget.webview
-        return None
+        return self.tabs.currentWidget().webview if self.tabs.currentWidget() else None
+
+    def add_new_tab(self, qurl=QUrl("https://www.google.com"), label="New Tab"):
+        browser_tab = BrowserTab()
+        self.tabs.addTab(browser_tab, label)
+        self.tabs.setCurrentWidget(browser_tab)
+        browser_tab.webview.urlChanged.connect(lambda qurl, browser_tab=browser_tab: self.update_url(qurl, browser_tab))
+
+    def update_url(self, qurl, browser_tab):
+        if self.tabs.currentWidget() == browser_tab:
+            self.url_bar.setText(qurl.toString())
+            self.url_bar.setCursorPosition(0)
+
+    def update_url_bar(self, index):
+        if self.tabs.currentWidget():
+            qurl = self.tabs.currentWidget().webview.url()
+            self.url_bar.setText(qurl.toString())
+            self.url_bar.setCursorPosition(0)
 
     def navigate_to_url(self):
         url = self.url_bar.text()
         if self.current_webview():
-            if not url.startswith(("http://", "https://")):
-                url = "http://" + url
             self.current_webview().setUrl(QUrl(url))
 
-    def update_url_bar(self, qurl=None, browser_tab=None):
-        if not browser_tab:
-            browser_tab = self.tabs.currentWidget()
-        
-        if browser_tab and browser_tab.webview.url() == self.tabs.currentWidget().webview.url():
-            self.url_bar.setText(browser_tab.webview.url().toString())
-            self.setWindowTitle(browser_tab.webview.title())
-
-    def go_back(self):
+    def back_page(self):
         if self.current_webview():
             self.current_webview().back()
 
-    def go_forward(self):
+    def forward_page(self):
         if self.current_webview():
             self.current_webview().forward()
 
@@ -136,24 +126,57 @@ class Browser(QMainWindow):
         if self.tabs.count() > 1:
             self.tabs.removeTab(index)
 
-    def set_proxy(self):
+    def find_and_set_proxy(self):
         """
-        Prompts the user for proxy details and sets the proxy for the entire application.
+        Fetches a list of proxies from GeoNode API, tests each one,
+        and applies the first working one to the application.
         """
-        proxy_info, ok = QInputDialog.getText(self, "Set Proxy",
-                                              "Enter proxy address and port (e.g., 127.0.0.1:8080):")
-        if ok and proxy_info:
-            try:
-                host, port = proxy_info.split(':')
-                port = int(port)
+        QMessageBox.information(self, "Finding Proxy", "Attempting to find and apply a working proxy...")
+        
+        try:
+            response = requests.get(GEONODE_API_URL, timeout=10)
+            response.raise_for_status() # Raise an exception for bad status codes
+            proxy_data = response.json()
+            proxies = proxy_data.get("data", [])
+
+            if not proxies:
+                QMessageBox.warning(self, "Proxy Not Found", "The GeoNode API did not return any proxies.")
+                return
+
+            working_proxy_found = False
+            for p in proxies:
+                host = p.get("ip")
+                port = int(p.get("port"))
                 
-                proxy = QNetworkProxy(QNetworkProxy.HttpProxy, host, port)
-                # Corrected line to set the proxy for the application
-                QNetworkProxy.setApplicationProxy(proxy)
-                
-                QMessageBox.information(self, "Proxy Set", "Proxy settings have been applied.")
-            except (ValueError, IndexError):
-                QMessageBox.warning(self, "Invalid Input", "Please enter a valid proxy address and port (e.g., 127.0.0.1:8080).")
+                if not host or not port:
+                    continue
+
+                try:
+                    # Set the proxy for testing
+                    test_proxy = QNetworkProxy(QNetworkProxy.HttpProxy, host, port)
+                    QNetworkProxy.setApplicationProxy(test_proxy)
+                    
+                    # Test the proxy by making a request
+                    test_response = requests.get(TEST_URL, proxies={'http': f'http://{host}:{port}', 'https': f'https://{host}:{port}'}, timeout=5)
+                    test_response.raise_for_status()
+                    
+                    # If the request is successful, the proxy works
+                    QMessageBox.information(self, "Proxy Set", f"Found and applied a working proxy: {host}:{port}")
+                    working_proxy_found = True
+                    break # Stop after finding the first working proxy
+                    
+                except (requests.exceptions.RequestException, ValueError) as e:
+                    print(f"Proxy {host}:{port} failed: {e}")
+                    continue
+
+            if not working_proxy_found:
+                QMessageBox.warning(self, "Proxy Failed", "Could not find a working proxy from the list.")
+
+        except requests.exceptions.RequestException as e:
+            QMessageBox.critical(self, "API Error", f"Failed to fetch proxy list: {e}")
+        except (ValueError, KeyError) as e:
+            QMessageBox.critical(self, "JSON Parsing Error", f"Failed to parse proxy data: {e}")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
